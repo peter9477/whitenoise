@@ -1,0 +1,20 @@
+[package]
+name = "whitenoise"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cpal = "0.15.3"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",            # CreateFontW
+    "Win32_System_LibraryLoader",    # GetModuleHandleW
+    "Win32_System_Power",            # SetThreadExecutionState (no idle sleep while playing)
+    "Win32_System_Threading",        # MMCSS, thread priority, power throttling opt-out
+    "Win32_UI_WindowsAndMessaging",  # the window
+    "Win32_UI_Controls",             # trackbars (sliders)
+  ]
+}
+
+[profile.release]
+opt-level = 3
