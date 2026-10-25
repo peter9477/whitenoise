@@ -3,6 +3,8 @@
 // band of noise with its own slider. Flat sliders give pink noise (equal power per octave).
 #![windows_subsystem = "windows"]
 
+mod hotkey;
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample};
 use std::cell::RefCell;
@@ -354,6 +356,24 @@ struct App {
     stream: Option<cpal::Stream>,
 }
 
+/// Append a timestamped line to %LOCALAPPDATA%\whitenoise\whitenoise.log (diagnostics only).
+pub(crate) fn log(msg: &str) {
+    use std::io::Write;
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK.lock();
+    let Some(path) = state_file().map(|p| p.with_file_name("whitenoise.log")) else { return };
+    // Keep it small: start over once it passes 256 KB.
+    let append = std::fs::metadata(&path).map(|m| m.len() < 256 * 1024).unwrap_or(false);
+    let file = std::fs::OpenOptions::new().create(true).write(true).append(append).truncate(!append).open(&path);
+    if let Ok(mut f) = file {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "{secs} {msg}");
+    }
+}
+
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -529,6 +549,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 });
                 SetTimer(hwnd, TIMER_WATCHDOG, 2000, None);
+                // M5 (laptop) / star (Natural 4000) act like clicking Play/Pause.
+                hotkey::start(hwnd, ID_PLAY);
                 0
             }
             WM_VSCROLL => {

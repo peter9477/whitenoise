@@ -13,6 +13,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",        # MMCSS, thread priority, power throttling opt-out
     "Win32_UI_WindowsAndMessaging",  # the window
     "Win32_UI_Controls",             # trackbars (sliders)
+    "Win32_UI_Input",                # enumerate HID devices for the play/pause key
+    "Win32_Storage_FileSystem",      # CreateFileW/ReadFile on those HID devices
+    "Win32_Security",                # needed by CreateFileW signature
+    "Win32_System_IO",               # ReadFile signature (OVERLAPPED)
+    "Win32_System_RemoteDesktop",    # session lock/unlock notifications
+    "Win32_System_StationsAndDesktops", # keyprobe: which desktop has input
   ]
 }
 

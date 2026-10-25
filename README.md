@@ -26,6 +26,21 @@ Copy-Item "$env:TEMP\target\release\whitenoise.exe" "$env:LOCALAPPDATA\whitenois
   screenshot.
 - Sliders, volume, play state and window position are saved to `%LOCALAPPDATA%\whitenoise\state.txt`.
 
+## Play/pause key
+
+- **Keys:** the laptop's **M5** key (ASUS ROG) and the **star** key on a Microsoft Natural
+  Ergonomic Keyboard 4000 both toggle play/pause. They work when the window isn't focused, and
+  even on the lock screen with the login box showing.
+- **How:** `src/hotkey.rs` opens those HID collections directly and reads their reports on
+  background threads. Normal key events stop reaching apps once the login box is up, so this
+  avoids them.
+- **Device changes:** it rescans every 5 s, so a keyboard plugged in later is picked up.
+- **Other keys:** `examples/keyprobe.rs` logs the reports special keys send, for finding codes
+  for other keys.
+- **Log:** `%LOCALAPPDATA%\whitenoise\whitenoise.log` records the devices opened and each toggle.
+- **Side effect:** M5 also keeps whatever it does normally, such as opening Armoury Crate if
+  that's enabled.
+
 ## Built for running overnight
 
 - **Audio thread:** registered with MMCSS ("Pro Audio") at time-critical priority. cpal 0.15's
