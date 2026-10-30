@@ -12,7 +12,10 @@ use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{CreateFontW, HFONT};
+use windows_sys::Win32::Graphics::Gdi::{
+    CreateFontW, CreateSolidBrush, FillRect, HBRUSH, HDC, HFONT, RDW_ALLCHILDREN, RDW_ERASE,
+    RDW_ERASENOW, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow, SetBkColor,
+};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
 use windows_sys::Win32::System::Threading::{
@@ -28,10 +31,10 @@ use windows_sys::Win32::UI::Controls::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRect, BM_SETCHECK, BS_CHECKBOX, BS_PUSHBUTTON, BS_PUSHLIKE, CW_USEDEFAULT,
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetDlgItem, GetMessageW, GetSystemMetrics,
-    GetWindowRect, IDC_ARROW, KillTimer, LoadCursorW, MSG, PostQuitMessage, RegisterClassW,
+    GetClientRect, GetWindowRect, IDC_ARROW, KillTimer, LoadCursorW, MSG, PostQuitMessage, RegisterClassW,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SendMessageW,
     SetTimer, SetWindowTextW, TranslateMessage, WM_COMMAND, WM_CREATE, WM_DESTROY,
-    WM_EXITSIZEMOVE, WM_SETFONT, WM_TIMER, WM_VSCROLL, WNDCLASSW, WS_CAPTION, WS_CHILD,
+    WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_SETFONT, WM_TIMER, WM_VSCROLL, WNDCLASSW, WS_CAPTION, WS_CHILD,
     WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 
@@ -347,6 +350,28 @@ const TBM_GETPOS: u32 = 0x400; // WM_USER
 const TIMER_PAUSE: usize = 1;
 const TIMER_WATCHDOG: usize = 2;
 
+// Background tint, same shades as asusmode: Perf green while playing, Turbo pink while paused.
+const fn rgb(r: u32, g: u32, b: u32) -> u32 {
+    r | (g << 8) | (b << 16) // COLORREF is 0x00BBGGRR
+}
+const TINT_PLAYING: u32 = rgb(0xE8, 0xF2, 0xE8);
+const TINT_PAUSED: u32 = rgb(0xFA, 0xE7, 0xE4);
+
+fn tint(playing: bool) -> (u32, HBRUSH) {
+    thread_local! {
+        static BRUSHES: (HBRUSH, HBRUSH) =
+            unsafe { (CreateSolidBrush(TINT_PLAYING), CreateSolidBrush(TINT_PAUSED)) };
+    }
+    BRUSHES.with(|&(on, off)| if playing { (TINT_PLAYING, on) } else { (TINT_PAUSED, off) })
+}
+
+/// Mirrors `state.playing` for painting, which can happen while APP is already borrowed.
+static PLAYING: AtomicBool = AtomicBool::new(false);
+
+fn is_playing() -> bool {
+    PLAYING.load(Relaxed)
+}
+
 thread_local! {
     static APP: RefCell<App> = RefCell::new(App { state: State::default(), stream: None });
 }
@@ -442,6 +467,7 @@ unsafe fn apply(hwnd: HWND, app: &App) {
     let master = if s.playing { db_to_lin(s.volume_db) } else { 0.0 };
     store(&MASTER_GAIN, master);
     keep_awake(s.playing);
+    PLAYING.store(s.playing, Relaxed);
 
     // Bands are independent unit-RMS noise, so total RMS = master * sqrt(sum of gain^2).
     let rms = db_to_lin(s.volume_db) * gains.iter().map(|g| g * g).sum::<f32>().sqrt();
@@ -456,6 +482,16 @@ unsafe fn apply(hwnd: HWND, app: &App) {
         SendMessageW(GetDlgItem(hwnd, ID_PLAY), BM_SETCHECK, s.playing as usize, 0);
         let label = wide(if s.playing { "Pause" } else { "Play" });
         SetWindowTextW(GetDlgItem(hwnd, ID_PLAY), label.as_ptr());
+        // Trackbars cache their background brush; re-setting the range makes them fetch it again.
+        for id in (ID_BAND0..ID_BAND0 + BANDS as i32).chain([ID_VOLUME]) {
+            SendMessageW(GetDlgItem(hwnd, id), TBM_SETRANGE, 1, (100 << 16) as isize);
+        }
+        RedrawWindow(
+            hwnd,
+            ptr::null(),
+            ptr::null_mut(),
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_ERASENOW | RDW_UPDATENOW,
+        );
     }
 }
 
@@ -601,6 +637,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     _ => {}
                 });
                 0
+            }
+            WM_ERASEBKGND => {
+                let mut r: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut r);
+                FillRect(wparam as HDC, &r, tint(is_playing()).1);
+                1
+            }
+            WM_CTLCOLORSTATIC => {
+                // Labels and trackbars paint their background with this brush.
+                let (color, brush) = tint(is_playing());
+                SetBkColor(wparam as HDC, color);
+                brush as LRESULT
             }
             WM_EXITSIZEMOVE | WM_DESTROY => {
                 let mut r: RECT = std::mem::zeroed();
